@@ -150,53 +150,9 @@ function outlineText(arts) {
 }
 
 /* ---------- 프롬프트 구성 ---------- */
-function buildPrompt(kind, title, draft) {
-  const rules = pickRules(draft);
-  const catName = Object.fromEntries(KB.categories.map((c) => [c.id, c.name]));
-  const ruleLines = rules.map((r) =>
-    `- [${r.id}] (${catName[r.category]}/${r.severity})${r.hit ? " ★관련" : ""} ${r.title}: ${r.question} (근거: ${r.basis})`
-  ).join("\n");
-  const arts = splitArticles(draft);
-  const bonchik = arts.filter((a) => a.section === "본칙").length;
-  const buchik = arts.filter((a) => a.section === "부칙").length;
-  const outline = `[자동 분할된 조문 목차 — 본칙 ${bonchik}개·부칙 ${buchik}개. Ⅲ 표는 이 목차의 조문번호를 그대로 사용할 것]\n${outlineText(arts)}`;
 
-  const statutes = pickStatutes(draft, rules);
-  const statuteBlock = statutes.length
-    ? statutes.map((s) =>
-        `〔${s.id}〕 ${s.law} ${s.article}${s.title ? `(${s.title})` : ""}\n${s.text}`
-      ).join("\n\n")
-    : "(매칭된 상위법령 원문이 없습니다. 일반 법리에 근거해 검토하되, 추정 근거는 '확인 필요'로 표기하세요.)";
-
-  return `당신은 대한민국 지방자치단체의 자치법규(조례·규칙) 및 행정규칙 입안·심사를 담당하는 전문 법제관입니다.
-법제처 「자치법규 입안 길라잡이」, 「행정규칙 입안·심사 기준」, 「법령 입안·심사 기준」과 지방자치법·행정기본법·헌법에 근거하여, 아래 초안을 4개 관점(법령 적합성·형식 적정성·내용 타당성·정합성)에서 검토하세요.
-
-[검토 대상]
-- 종류: ${kind}
-- 제명: ${title || "(미입력)"}
-- 본문:
-"""
-${draft}
-"""
-
-${outline}
-
-[상위법령 원문 — 아래 조문에 "비추어" 적합성을 직접 대조 검토할 것. 인용 시 〔ID〕 표기를 그대로 사용]
-${statuteBlock}
-
-[검토 체크리스트 — 이 항목들을 근거로 판단할 것. ★관련 표시는 본문에서 키워드가 감지된 항목]
-${ruleLines}
-
-[작성 지침]
-1. 아래 Markdown 형식을 정확히 따르세요. 표는 | 구분자 사용.
-2. 모든 지적사항은 반드시 근거를 명시하세요. 근거는 ① 규칙ID(예: L-03)와 ② 위 상위법령 원문의 〔ID〕(예: 〔지방자치법-28〕) 또는 구체 법령 조문을 함께 적습니다. 위 원문에 없는 법령을 인용할 때는 "(원문 미확인)"을 덧붙이세요.
-3. 상위법령 적합성 판단은 위 [상위법령 원문]의 실제 문언과 대조해서 서술하세요. "위임 범위 초과/위반"을 주장할 때는 어느 조문의 어느 문언에 비추어 그러한지 한 줄로 적으세요.
-4. 위험도는 [높음]/[중간]/[낮음]으로 표기하세요.
-5. 지적한 조문마다 "대안 조문"을 제시하세요. 단순 설명이 아니라 실제 조문 문구(제○조(제목) … 형태의 완성된 문장)를 작성하고, 현행→대안을 대비해 보이세요.
-6. 한국어 공문체로, 과장 없이 사실 기반으로 작성하세요.
-7. Ⅲ. 개별 조문 검토는 위 '조문 목차'의 모든 조문을 빠짐없이 검토하되, 지적사항이 있는 조문만 표에 적으세요.
-
-[출력 형식]
+// 공통 출력 형식 — 1차/2차 프롬프트가 동일 골격을 쓰도록 분리
+const OUTPUT_FORMAT = `[출력 형식]
 ## Ⅰ. 제안 개요
 - 목적:
 - 주요 내용: (3~5개 불릿)
@@ -222,7 +178,93 @@ ${ruleLines}
 
 ## Ⅴ. 종합 검토 의견
 - 결론: (수용 / 조건부 수용 / 재검토 권고 중 택1)
-- 우선 보완사항: (번호 매긴 1~5개, 각 항목에 근거 〔ID〕 병기)
+- 우선 보완사항: (번호 매긴 1~5개, 각 항목에 근거 〔ID〕 병기)`;
+
+// 좋은 지적 1건의 모범 예시(few-shot) — 깊이·근거·대안 조문 수준을 모방하도록 유도
+const FEWSHOT = `[모범 작성 예시 — 깊이와 형식의 기준으로만 삼고, 실제 검토 대상에는 그대로 베끼지 말 것]
+Ⅲ 표 행 예시:
+| 제4조(지급제한) | 조례로 100만원 이하 과태료를 직접 신설함. 과태료는 법률 또는 법률의 위임이 있어야 부과 가능(죄형·제재법정주의) | [높음] | F-12·〔지방자치법-34〕·〔헌법-37〕 | 과태료 조항 삭제 또는 상위법령의 위임 근거 명시 후 재설계 |
+Ⅳ 대안 조문 예시:
+### 제4조(부정수급액의 환수)
+- 현행: "시장은 부정한 방법으로 수당을 받은 사람에게 100만원 이하의 과태료를 부과한다."
+- 대안: "① 시장은 거짓이나 그 밖의 부정한 방법으로 청년수당을 받은 사람에게 그 받은 금액의 전부 또는 일부를 환수할 수 있다. ② 환수의 절차와 방법은 규칙으로 정한다."
+- 근거: F-12(제재는 법률유보)·〔지방자치법-34〕(과태료의 법률 위임)·〔헌법-37〕(법률유보)`;
+
+// 1차/2차 공통 컨텍스트(대상·목차·상위법령 원문·체크리스트) 생성
+function buildContext(kind, title, draft) {
+  const rules = pickRules(draft);
+  const catName = Object.fromEntries(KB.categories.map((c) => [c.id, c.name]));
+  const ruleLines = rules.map((r) =>
+    `- [${r.id}] (${catName[r.category]}/${r.severity})${r.hit ? " ★관련" : ""} ${r.title}: ${r.question} (근거: ${r.basis})`
+  ).join("\n");
+  const arts = splitArticles(draft);
+  const bonchik = arts.filter((a) => a.section === "본칙").length;
+  const buchik = arts.filter((a) => a.section === "부칙").length;
+  const outline = `[자동 분할된 조문 목차 — 본칙 ${bonchik}개·부칙 ${buchik}개. Ⅲ 표는 이 목차의 조문번호를 그대로 사용할 것]\n${outlineText(arts)}`;
+
+  const statutes = pickStatutes(draft, rules);
+  const statuteBlock = statutes.length
+    ? statutes.map((s) =>
+        `〔${s.id}〕 ${s.law} ${s.article}${s.title ? `(${s.title})` : ""}\n${s.text}`
+      ).join("\n\n")
+    : "(매칭된 상위법령 원문이 없습니다. 일반 법리에 근거해 검토하되, 추정 근거는 '확인 필요'로 표기하세요.)";
+
+  return `[검토 대상]
+- 종류: ${kind}
+- 제명: ${title || "(미입력)"}
+- 본문:
+"""
+${draft}
+"""
+
+${outline}
+
+[상위법령 원문 — 아래 조문에 "비추어" 적합성을 직접 대조 검토할 것. 인용 시 〔ID〕 표기를 그대로 사용]
+${statuteBlock}
+
+[검토 체크리스트 — 이 항목들을 근거로 판단할 것. ★관련 표시는 본문에서 키워드가 감지된 항목]
+${ruleLines}`;
+}
+
+// 1차: 초안 검토 보고서
+function buildPrompt(kind, title, draft) {
+  return `당신은 대한민국 지방자치단체의 자치법규(조례·규칙) 및 행정규칙 입안·심사를 담당하는 전문 법제관입니다.
+법제처 「자치법규 입안 길라잡이」, 「행정규칙 입안·심사 기준」, 「법령 입안·심사 기준」과 지방자치법·행정기본법·헌법에 근거하여, 아래 초안을 4개 관점(법령 적합성·형식 적정성·내용 타당성·정합성)에서 검토하세요.
+
+${buildContext(kind, title, draft)}
+
+[작성 지침]
+1. 아래 Markdown 형식을 정확히 따르세요. 표는 | 구분자 사용.
+2. 모든 지적사항은 반드시 근거를 명시하세요. 근거는 ① 규칙ID(예: L-03)와 ② 위 상위법령 원문의 〔ID〕(예: 〔지방자치법-28〕) 또는 구체 법령 조문을 함께 적습니다. 위 원문에 없는 법령을 인용할 때는 "(원문 미확인)"을 덧붙이세요.
+3. 상위법령 적합성 판단은 위 [상위법령 원문]의 실제 문언과 대조해서 서술하세요. "위임 범위 초과/위반"을 주장할 때는 어느 조문의 어느 문언에 비추어 그러한지 한 줄로 적으세요.
+4. 위험도는 [높음]/[중간]/[낮음]으로 표기하세요.
+5. 지적한 조문마다 "대안 조문"을 제시하세요. 단순 설명이 아니라 실제 조문 문구(제○조(제목) … 형태의 완성된 문장)를 작성하고, 현행→대안을 대비해 보이세요.
+6. 한국어 공문체로, 과장 없이 사실 기반으로 작성하세요.
+7. Ⅲ. 개별 조문 검토는 위 '조문 목차'의 모든 조문을 빠짐없이 검토하되, 지적사항이 있는 조문만 표에 적으세요.
+
+${FEWSHOT}
+
+${OUTPUT_FORMAT}
+`;
+}
+
+// 2차: 1차 보고서를 자기비판·보완하여 최종본 산출
+function buildRevisePrompt(kind, title, draft, firstReport) {
+  return `당신은 위 1차 검토를 감수하는 상급 법제심사관입니다. 아래 [1차 보고서]를 비판적으로 점검하고 보완하여 최종 보고서를 완성하세요.
+
+${buildContext(kind, title, draft)}
+
+[1차 보고서]
+${firstReport}
+
+[보완 지침 — 아래를 모두 점검하여 더 나은 최종본을 출력]
+1. 근거 누락: 모든 지적에 규칙ID와 상위법령 〔ID〕가 달려 있는지 확인하고, 빠진 곳을 채우세요. 근거를 댈 수 없는 주장은 삭제하거나 "확인 필요"로 명확히 표시하세요.
+2. 상위법령 대조 검증: "위임 초과/위반" 등 단정적 판단이 위 [상위법령 원문]의 실제 문언과 일치하는지 재검증하고, 과장·억측은 완화하세요. 원문에 없는 조문을 인용했다면 "(원문 미확인)"을 붙이세요.
+3. 대안 조문 강화: Ⅳ의 대안이 단순 설명에 그치거나 비어 있으면, 실제로 통용 가능한 완성된 조문 문구(항·호 포함)로 다시 쓰세요.
+4. 누락 쟁점 보강: 1차가 놓친 조문·쟁점이 있으면 추가하세요. 중복·동어반복은 정리하세요.
+5. 형식: 아래 출력 형식과 표 구조를 정확히 지키세요. 변경 이력 설명 없이 '완성된 최종 보고서'만 출력하세요.
+
+${OUTPUT_FORMAT}
 `;
 }
 
@@ -248,17 +290,15 @@ function parse429(err) {
   return { retrySec, metric };
 }
 
-async function postGemini(key, model, prompt) {
+async function postGemini(key, model, contents) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
-  const body = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
-  };
+  const body = { contents, generationConfig: { temperature: 0.3, maxOutputTokens: 8192 } };
   return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
-async function callGemini(key, model, prompt, onWait) {
-  let res = await postGemini(key, model, prompt);
+// 단일 생성 호출: 429 자동 재시도 + 오류 메시지 매핑. {text, finishReason} 반환.
+async function genOnce(key, model, contents, onWait) {
+  let res = await postGemini(key, model, contents);
 
   // 429: 서버가 알려준 지연이 짧으면 1회 자동 재시도
   if (res.status === 429) {
@@ -267,7 +307,7 @@ async function callGemini(key, model, prompt, onWait) {
     if (retrySec != null && retrySec <= 60) {
       if (onWait) onWait(`사용량 한도(${metric || "분당"})에 걸려 ${retrySec}초 후 자동 재시도합니다…`);
       await sleep((retrySec + 1) * 1000);
-      res = await postGemini(key, model, prompt);
+      res = await postGemini(key, model, contents);
     } else {
       const wait = metric.includes("일일")
         ? "오늘의 무료 일일 한도를 모두 사용했습니다. 내일(태평양시 자정 기준) 초기화되거나, 다른 모델을 선택해 보세요."
@@ -286,9 +326,28 @@ async function callGemini(key, model, prompt, onWait) {
     throw new Error(msg);
   }
   const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-  if (!text) throw new Error("응답이 비어 있습니다. (안전필터 차단 또는 한도 문제일 수 있어요)");
-  return text;
+  const cand = data.candidates?.[0];
+  const text = cand?.content?.parts?.map((p) => p.text).join("") || "";
+  return { text, finishReason: cand?.finishReason || "" };
+}
+
+// 프롬프트 1건 → 완성 텍스트. 토큰 한도로 잘리면(MAX_TOKENS) 끊긴 지점부터 자동 이어쓰기.
+async function callGemini(key, model, prompt, onWait) {
+  let contents = [{ role: "user", parts: [{ text: prompt }] }];
+  let full = "";
+  for (let i = 0; i < 3; i++) {
+    const { text, finishReason } = await genOnce(key, model, contents, onWait);
+    full += text;
+    if (finishReason !== "MAX_TOKENS") break;
+    if (onWait) onWait("보고서가 길어 끊긴 부분을 이어서 생성 중입니다…");
+    contents = [
+      { role: "user", parts: [{ text: prompt }] },
+      { role: "model", parts: [{ text: full }] },
+      { role: "user", parts: [{ text: "직전 응답이 토큰 한도로 잘렸습니다. 인사말·재작성 없이, 끊긴 지점 바로 다음부터 이어지는 내용만 계속 출력하세요." }] }
+    ];
+  }
+  if (!full) throw new Error("응답이 비어 있습니다. (안전필터 차단 또는 한도 문제일 수 있어요)");
+  return full;
 }
 
 /* ---------- 아주 작은 Markdown → HTML 렌더러 ---------- */
@@ -348,12 +407,19 @@ async function runReview() {
   $("reviewBtn").disabled = true;
   $("resultCard").scrollIntoView({ behavior: "smooth", block: "start" });
 
+  const deep = $("deep") ? $("deep").checked : true;
+  const setStatus = (m) => { st.innerHTML = '<span class="spin"></span>' + m; };
   try {
-    const prompt = buildPrompt(kind, title, draft);
-    const out = await callGemini(key, model, prompt, (m) => { st.innerHTML = '<span class="spin"></span>' + m; });
+    let out = await callGemini(key, model, buildPrompt(kind, title, draft),
+      (m) => setStatus((deep ? "[1/2] " : "") + m));
+    if (deep) {
+      setStatus("[2/2] 1차 검토를 정밀 보완 중입니다…");
+      out = await callGemini(key, model, buildRevisePrompt(kind, title, draft, out),
+        (m) => setStatus("[2/2] " + m));
+    }
     window._lastReport = out;
     $("report").innerHTML = mdToHtml(out);
-    st.textContent = `완료 · 모델 ${model} · ${new Date().toLocaleString("ko-KR")}`;
+    st.textContent = `완료 · 모델 ${model}${deep ? " · 2단계 정밀검토" : ""} · ${new Date().toLocaleString("ko-KR")}`;
     $("copyBtn").hidden = $("printBtn").hidden = false;
   } catch (e) {
     st.className = "status err";
