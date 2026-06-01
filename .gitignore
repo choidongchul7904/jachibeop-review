@@ -1,0 +1,5 @@
+# 의존성 없음 (순수 정적). 불필요 파일만 제외
+.DS_Store
+Thumbs.db
+*.log
+.vscode/

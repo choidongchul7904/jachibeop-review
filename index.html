@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>자치법규 자가검토 도우미 · 조례·규칙 입안 점검</title>
+<meta name="description" content="법제처 입안·심사 기준 기반 조례·규칙 자가점검 무료 서비스. 본인 Gemini API 키로 동작하여 서버 비용 없이 누구나 이용할 수 있습니다." />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <h1>자치법규 자가검토 도우미</h1>
+    <p class="tagline">법제처 입안·심사 기준 기반 · 조례/규칙 초안 자가점검 · 완전 무료</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- API 키 설정 -->
+  <section class="card" id="key-card">
+    <h2>① Gemini API 키 (무료)</h2>
+    <p class="muted">
+      이 서비스는 <b>여러분 본인의 무료 API 키</b>로 동작합니다. 운영자에게 비용이 발생하지 않아 누구나 무료로 쓸 수 있습니다.
+      키는 <b>브라우저(이 기기)에만 저장</b>되며 외부 서버로 전송되지 않습니다.
+      <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">→ Google AI Studio에서 무료 키 발급</a>
+    </p>
+    <div class="row">
+      <input type="password" id="apiKey" placeholder="AIza... 형식의 키를 붙여넣으세요" autocomplete="off" />
+      <select id="model" title="모델 선택">
+        <option value="gemini-2.0-flash">gemini-2.0-flash (권장·무료)</option>
+        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+        <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+      </select>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="remember" checked /> 이 기기에 키 저장</label>
+      <span id="keyStatus" class="muted"></span>
+    </div>
+  </section>
+
+  <!-- 입력 -->
+  <section class="card">
+    <h2>② 조례·규칙 초안 입력</h2>
+    <p class="muted">검토할 조례안/규칙안/행정규칙 전문을 붙여넣으세요. (조문 형태가 가장 정확합니다)</p>
+    <div class="row">
+      <input type="text" id="title" placeholder="자치법규 제명 (예: ○○시 청년기본소득 지급 조례)" />
+      <select id="kind" title="종류">
+        <option value="조례">조례</option>
+        <option value="규칙">규칙</option>
+        <option value="훈령·예규·고시">훈령·예규·고시</option>
+      </select>
+    </div>
+    <textarea id="draft" rows="14" placeholder="제1조(목적) 이 조례는 ...&#10;제2조(정의) ...&#10;제3조 ...&#10;부칙&#10;제1조(시행일) 이 조례는 공포한 날부터 시행한다."></textarea>
+    <div class="row between">
+      <span class="muted" id="charCount">0자</span>
+      <div>
+        <button id="sampleBtn" class="ghost">예시 채우기</button>
+        <button id="reviewBtn" class="primary">검토 시작</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 진행/결과 -->
+  <section class="card" id="resultCard" hidden>
+    <div class="row between">
+      <h2>③ 검토 보고서</h2>
+      <div>
+        <button id="copyBtn" class="ghost" hidden>복사</button>
+        <button id="printBtn" class="ghost" hidden>인쇄/PDF</button>
+      </div>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="report" class="report"></div>
+  </section>
+
+  <details class="card disclaimer">
+    <summary>면책 및 작동 원리</summary>
+    <p id="disc"></p>
+    <p class="muted">작동 원리: 정적 웹페이지가 브라우저에서 직접 Google Gemini API를 호출합니다. 별도 서버·DB가 없어 운영비가 0원이며, 입력한 조례 내용과 API 키는 운영자 서버를 거치지 않고 사용자의 브라우저에서 Google로만 전송됩니다.</p>
+    <p class="muted" id="kbMeta"></p>
+  </details>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap muted">
+    무료·오픈 · 법제처 자치법규/행정규칙 입안·심사 기준 기반 · 자가점검 참고용
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
