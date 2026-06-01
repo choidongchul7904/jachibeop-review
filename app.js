@@ -16,12 +16,49 @@ async function loadKB() {
   }
 }
 
+/* ---------- 사용 가능한 모델 동적 조회 ---------- */
+async function loadModels(key, manual) {
+  key = (key || "").trim();
+  if (!key) { if (manual) alert("먼저 API 키를 입력하세요."); return; }
+  const sel = $("model");
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`);
+    if (!res.ok) {
+      if (manual) $("keyStatus").textContent = res.status === 400 || res.status === 403 ? "키가 올바르지 않거나 권한이 없습니다." : `모델 목록 조회 실패 (HTTP ${res.status})`;
+      return;
+    }
+    const data = await res.json();
+    let models = (data.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+      .map((m) => m.name.replace(/^models\//, ""))
+      .filter((n) => /gemini/.test(n) && !/embedding|aqa|imagen|tts|vision|exp|thinking/i.test(n));
+    if (!models.length) { if (manual) $("keyStatus").textContent = "사용 가능한 생성 모델이 없습니다."; return; }
+    // flash 우선, 최신(이름 역순) 우선
+    models.sort((a, b) => {
+      const fa = /flash/.test(a) ? 0 : 1, fb = /flash/.test(b) ? 0 : 1;
+      return fa !== fb ? fa - fb : b.localeCompare(a, undefined, { numeric: true });
+    });
+    const prev = localStorage.getItem(LS.model);
+    sel.innerHTML = "";
+    models.forEach((n, i) => {
+      const o = document.createElement("option");
+      o.value = n; o.textContent = n + (i === 0 ? " (권장)" : "");
+      sel.appendChild(o);
+    });
+    sel.value = (prev && models.includes(prev)) ? prev : models[0];
+    persist();
+    $("keyStatus").textContent = `사용 가능한 모델 ${models.length}개 불러옴 ✓`;
+  } catch (e) {
+    if (manual) $("keyStatus").textContent = "네트워크 오류로 모델 목록을 불러오지 못했습니다.";
+  }
+}
+
 /* ---------- 키 저장/복원 ---------- */
 function restore() {
   const k = localStorage.getItem(LS.key);
-  if (k) { $("apiKey").value = k; $("keyStatus").textContent = "저장된 키 불러옴 ✓"; }
   const m = localStorage.getItem(LS.model);
-  if (m) $("model").value = m;
+  if (m) { const o = document.createElement("option"); o.value = m; o.textContent = m; $("model").appendChild(o); $("model").value = m; }
+  if (k) { $("apiKey").value = k; $("keyStatus").textContent = "저장된 키 불러옴 ✓"; loadModels(k); }
 }
 function persist() {
   if ($("remember").checked) {
@@ -186,7 +223,7 @@ async function callGemini(key, model, prompt, onWait) {
     if (res.status === 429) msg = "재시도 후에도 사용량 한도에 걸렸습니다. 1분 정도 기다렸다가 다시 시도하거나, ① 섹션에서 다른 모델을 선택하세요.";
     if (res.status === 400 && /API key/i.test(msg)) msg = "API 키가 올바르지 않습니다. AI Studio에서 다시 확인하세요.";
     if (res.status === 403) msg = "키 권한 오류입니다. AI Studio에서 'Generative Language API'가 사용 설정된 무료 키인지 확인하세요.";
-    if (res.status === 404) msg = `모델(${model})을 사용할 수 없습니다. ① 섹션에서 다른 모델을 선택해 보세요.`;
+    if (res.status === 404) msg = `모델(${model})을 사용할 수 없습니다(종료되었거나 키에서 미지원). ① 섹션의 [모델 불러오기]를 눌러 사용 가능한 모델로 바꿔주세요.`;
     throw new Error(msg);
   }
   const data = await res.json();
@@ -286,8 +323,9 @@ function init() {
     $("draft").value = SAMPLE;
     $("draft").dispatchEvent(new Event("input"));
   });
-  $("apiKey").addEventListener("change", persist);
+  $("apiKey").addEventListener("change", () => { persist(); loadModels($("apiKey").value); });
   $("model").addEventListener("change", persist);
+  $("loadModelsBtn").addEventListener("click", () => loadModels($("apiKey").value, true));
   $("copyBtn").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(window._lastReport || ""); $("copyBtn").textContent = "복사됨 ✓"; setTimeout(() => $("copyBtn").textContent = "복사", 1500); } catch (_) {}
   });
