@@ -3,17 +3,58 @@
 const $ = (id) => document.getElementById(id);
 const LS = { key: "jbr_key", model: "jbr_model" };
 let KB = null;
+let STATUTES = [];
 
-/* ---------- 지식베이스 로드 ---------- */
+/* ---------- 지식베이스 + 상위법령 코퍼스 로드 ---------- */
 async function loadKB() {
   try {
     const res = await fetch("kb/rules.json", { cache: "no-store" });
     KB = await res.json();
     $("disc").textContent = KB.disclaimer || "";
-    $("kbMeta").textContent = `지식베이스 v${KB.version} · 규칙 ${KB.rules.length}개 · 출처: ${KB.source}`;
   } catch (e) {
     $("disc").textContent = "지식베이스를 불러오지 못했습니다. (로컬에서 file:// 로 열면 차단될 수 있어요. 간이 서버나 배포 주소로 여세요.)";
+    return;
   }
+  try {
+    const r2 = await fetch("kb/statutes.json", { cache: "no-store" });
+    STATUTES = (await r2.json()).laws || [];
+  } catch (e) { STATUTES = []; }
+  $("kbMeta").textContent = `지식베이스 v${KB.version} · 규칙 ${KB.rules.length}개 · 상위법령 원문 ${STATUTES.length}개 조문 · 출처: ${KB.source}`;
+}
+
+/* ---------- 상위법령 선별 (규칙 근거 인용 + 본문 키워드) ---------- */
+// 적용 규칙의 basis에서 "○○법 제N조"를 뽑아 해당 원문 조문을 매칭하고,
+// 본문 키워드에 걸리는 조문도 추가한다. (프롬프트 크기 보호를 위해 상한)
+function pickStatutes(draft, rules) {
+  if (!STATUTES.length) return [];
+  const t = draft.replace(/\s/g, "");
+  const score = new Map();
+  const bump = (id, n) => score.set(id, (score.get(id) || 0) + n);
+
+  // 1) 규칙 근거 인용에서 법명+조번호 추출
+  const lawRe = /(헌법|행정기본법|지방자치법(?:\s*시행령)?|지방재정법|행정절차법)\s*제\s*(\d+)\s*조/g;
+  for (const r of rules) {
+    const w = r.hit ? 3 : 1;
+    let m;
+    const basis = r.basis || "";
+    while ((m = lawRe.exec(basis)) !== null) {
+      const law = m[1].replace(/\s/g, "");
+      bump(`${law}-${m[2]}`, w + 1);
+    }
+  }
+  // 2) 조문 자체 키워드가 본문에 등장
+  for (const s of STATUTES) {
+    if ((s.keywords || []).some((kw) => t.includes(kw.replace(/\s/g, "")))) bump(s.id, 2);
+  }
+  // 3) 핵심 기반 조문은 약하게 보장(조례 검토의 토대)
+  ["지방자치법-28", "행정기본법-10", "헌법-37"].forEach((id) => bump(id, 0.5));
+
+  const byId = Object.fromEntries(STATUTES.map((s) => [s.id, s]));
+  return [...score.entries()]
+    .filter(([id]) => byId[id])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 14)
+    .map(([id]) => byId[id]);
 }
 
 /* ---------- 사용 가능한 모델 동적 조회 ---------- */
@@ -120,6 +161,13 @@ function buildPrompt(kind, title, draft) {
   const buchik = arts.filter((a) => a.section === "부칙").length;
   const outline = `[자동 분할된 조문 목차 — 본칙 ${bonchik}개·부칙 ${buchik}개. Ⅲ 표는 이 목차의 조문번호를 그대로 사용할 것]\n${outlineText(arts)}`;
 
+  const statutes = pickStatutes(draft, rules);
+  const statuteBlock = statutes.length
+    ? statutes.map((s) =>
+        `〔${s.id}〕 ${s.law} ${s.article}${s.title ? `(${s.title})` : ""}\n${s.text}`
+      ).join("\n\n")
+    : "(매칭된 상위법령 원문이 없습니다. 일반 법리에 근거해 검토하되, 추정 근거는 '확인 필요'로 표기하세요.)";
+
   return `당신은 대한민국 지방자치단체의 자치법규(조례·규칙) 및 행정규칙 입안·심사를 담당하는 전문 법제관입니다.
 법제처 「자치법규 입안 길라잡이」, 「행정규칙 입안·심사 기준」, 「법령 입안·심사 기준」과 지방자치법·행정기본법·헌법에 근거하여, 아래 초안을 4개 관점(법령 적합성·형식 적정성·내용 타당성·정합성)에서 검토하세요.
 
@@ -133,16 +181,20 @@ ${draft}
 
 ${outline}
 
+[상위법령 원문 — 아래 조문에 "비추어" 적합성을 직접 대조 검토할 것. 인용 시 〔ID〕 표기를 그대로 사용]
+${statuteBlock}
+
 [검토 체크리스트 — 이 항목들을 근거로 판단할 것. ★관련 표시는 본문에서 키워드가 감지된 항목]
 ${ruleLines}
 
 [작성 지침]
 1. 아래 Markdown 형식을 정확히 따르세요. 표는 | 구분자 사용.
-2. 근거 없는 추측은 피하고, 위반·미흡이 의심되면 해당 규칙ID와 근거 법령을 명시하세요.
-3. 위험도는 [높음]/[중간]/[낮음]으로 표기하세요.
-4. 실제 수정 문구(권고안)를 가능한 한 구체적으로 제시하세요.
-5. 한국어 공문체로, 과장 없이 사실 기반으로 작성하세요.
-6. Ⅲ. 개별 조문 검토는 위 '조문 목차'의 모든 조문을 빠짐없이 검토하되, 지적사항이 있는 조문만 표에 적으세요.
+2. 모든 지적사항은 반드시 근거를 명시하세요. 근거는 ① 규칙ID(예: L-03)와 ② 위 상위법령 원문의 〔ID〕(예: 〔지방자치법-28〕) 또는 구체 법령 조문을 함께 적습니다. 위 원문에 없는 법령을 인용할 때는 "(원문 미확인)"을 덧붙이세요.
+3. 상위법령 적합성 판단은 위 [상위법령 원문]의 실제 문언과 대조해서 서술하세요. "위임 범위 초과/위반"을 주장할 때는 어느 조문의 어느 문언에 비추어 그러한지 한 줄로 적으세요.
+4. 위험도는 [높음]/[중간]/[낮음]으로 표기하세요.
+5. 지적한 조문마다 "대안 조문"을 제시하세요. 단순 설명이 아니라 실제 조문 문구(제○조(제목) … 형태의 완성된 문장)를 작성하고, 현행→대안을 대비해 보이세요.
+6. 한국어 공문체로, 과장 없이 사실 기반으로 작성하세요.
+7. Ⅲ. 개별 조문 검토는 위 '조문 목차'의 모든 조문을 빠짐없이 검토하되, 지적사항이 있는 조문만 표에 적으세요.
 
 [출력 형식]
 ## Ⅰ. 제안 개요
@@ -151,19 +203,26 @@ ${ruleLines}
 
 ## Ⅱ. 관점별 검토 의견
 ### 1) 법령 적합성
-(위임근거·위임범위·법률유보 중심. 문제 없으면 "특이사항 없음"이라고 적되 확인한 근거를 1줄)
+(위임근거·위임범위·법률유보 중심. 위 상위법령 원문 〔ID〕를 인용해 대조 서술. 문제 없으면 "특이사항 없음"이라 적되 확인한 근거 조문을 1줄)
 ### 2) 형식 적정성
 ### 3) 내용 타당성
 ### 4) 정합성
 
 ## Ⅲ. 개별 조문 검토
-| 조문 | 쟁점 | 위험도 | 근거(규칙ID·법령) | 수정 권고 |
+| 조문 | 쟁점 | 위험도 | 근거(규칙ID·상위법령〔ID〕) | 수정 권고 |
 | --- | --- | --- | --- | --- |
 (문제가 된 조문만, 없으면 "지적사항 없음" 행 1개)
 
-## Ⅳ. 종합 검토 의견
+## Ⅳ. 대안 조문 권고안
+(Ⅲ에서 지적한 조문 중 수정이 필요한 것에 대해, 아래 형식으로 실제 조문 문구를 제시)
+### 제○조(제목)
+- 현행: (원문 또는 "신설")
+- 대안: (완성된 조문 문구)
+- 근거: (규칙ID·상위법령〔ID〕)
+
+## Ⅴ. 종합 검토 의견
 - 결론: (수용 / 조건부 수용 / 재검토 권고 중 택1)
-- 우선 보완사항: (번호 매긴 1~5개)
+- 우선 보완사항: (번호 매긴 1~5개, 각 항목에 근거 〔ID〕 병기)
 `;
 }
 
