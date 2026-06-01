@@ -131,23 +131,62 @@ ${ruleLines}
 }
 
 /* ---------- Gemini 호출 (브라우저 직접, BYOK) ---------- */
-async function callGemini(key, model, prompt) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 429 응답 본문에서 재시도 지연(초)과 한도 종류를 추출
+function parse429(err) {
+  const details = err?.error?.details || [];
+  let retrySec = null, metric = "";
+  for (const d of details) {
+    if (d["@type"]?.includes("RetryInfo") && d.retryDelay) {
+      const m = String(d.retryDelay).match(/(\d+(\.\d+)?)s/);
+      if (m) retrySec = Math.ceil(parseFloat(m[1]));
+    }
+    if (d["@type"]?.includes("QuotaFailure") && d.violations?.length) {
+      const id = d.violations[0].quotaId || "";
+      if (/PerDay/i.test(id)) metric = "일일(하루) 한도";
+      else if (/PerMinute/i.test(id)) metric = "분당 한도";
+      else metric = id;
+    }
+  }
+  return { retrySec, metric };
+}
+
+async function postGemini(key, model, prompt) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
   const body = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
   };
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+async function callGemini(key, model, prompt, onWait) {
+  let res = await postGemini(key, model, prompt);
+
+  // 429: 서버가 알려준 지연이 짧으면 1회 자동 재시도
+  if (res.status === 429) {
+    let err = {}; try { err = await res.json(); } catch (_) {}
+    const { retrySec, metric } = parse429(err);
+    if (retrySec != null && retrySec <= 60) {
+      if (onWait) onWait(`사용량 한도(${metric || "분당"})에 걸려 ${retrySec}초 후 자동 재시도합니다…`);
+      await sleep((retrySec + 1) * 1000);
+      res = await postGemini(key, model, prompt);
+    } else {
+      const wait = metric.includes("일일")
+        ? "오늘의 무료 일일 한도를 모두 사용했습니다. 내일(태평양시 자정 기준) 초기화되거나, 다른 모델을 선택해 보세요."
+        : `사용량 한도(${metric || "분당/일일"})를 초과했습니다.${retrySec ? ` 약 ${retrySec}초 후` : " 잠시 후"} 다시 시도하거나, ① 섹션에서 더 가벼운 모델을 선택하세요.`;
+      throw new Error(wait);
+    }
+  }
+
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try { const e = await res.json(); msg = e.error?.message || msg; } catch (_) {}
+    if (res.status === 429) msg = "재시도 후에도 사용량 한도에 걸렸습니다. 1분 정도 기다렸다가 다시 시도하거나, ① 섹션에서 다른 모델을 선택하세요.";
     if (res.status === 400 && /API key/i.test(msg)) msg = "API 키가 올바르지 않습니다. AI Studio에서 다시 확인하세요.";
-    if (res.status === 429) msg = "무료 사용 한도(분당/일일)를 초과했습니다. 잠시 후 다시 시도하세요.";
-    if (res.status === 404) msg = `모델(${model})을 사용할 수 없습니다. 다른 모델을 선택해 보세요.`;
+    if (res.status === 403) msg = "키 권한 오류입니다. AI Studio에서 'Generative Language API'가 사용 설정된 무료 키인지 확인하세요.";
+    if (res.status === 404) msg = `모델(${model})을 사용할 수 없습니다. ① 섹션에서 다른 모델을 선택해 보세요.`;
     throw new Error(msg);
   }
   const data = await res.json();
@@ -215,7 +254,7 @@ async function runReview() {
 
   try {
     const prompt = buildPrompt(kind, title, draft);
-    const out = await callGemini(key, model, prompt);
+    const out = await callGemini(key, model, prompt, (m) => { st.innerHTML = '<span class="spin"></span>' + m; });
     window._lastReport = out;
     $("report").innerHTML = mdToHtml(out);
     st.textContent = `완료 · 모델 ${model} · ${new Date().toLocaleString("ko-KR")}`;
