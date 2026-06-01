@@ -31,20 +31,21 @@ function pickStatutes(draft, rules) {
   const score = new Map();
   const bump = (id, n) => score.set(id, (score.get(id) || 0) + n);
 
-  // 1) 규칙 근거 인용에서 법명+조번호 추출
+  // 1) 적중(hit) 규칙의 근거 인용에서만 법명+조번호 추출(무관 조문 노이즈 제거)
   const lawRe = /(헌법|행정기본법|지방자치법(?:\s*시행령)?|지방재정법|행정절차법)\s*제\s*(\d+)\s*조/g;
   for (const r of rules) {
-    const w = r.hit ? 3 : 1;
+    if (!r.hit) continue;
     let m;
     const basis = r.basis || "";
     while ((m = lawRe.exec(basis)) !== null) {
       const law = m[1].replace(/\s/g, "");
-      bump(`${law}-${m[2]}`, w + 1);
+      bump(`${law}-${m[2]}`, 4);
     }
   }
-  // 2) 조문 자체 키워드가 본문에 등장
+  // 2) 조문 키워드가 본문에 등장(일치 키워드 수에 비례 — 구체적으로 관련된 조문 우대)
   for (const s of STATUTES) {
-    if ((s.keywords || []).some((kw) => t.includes(kw.replace(/\s/g, "")))) bump(s.id, 2);
+    const hits = (s.keywords || []).filter((kw) => t.includes(kw.replace(/\s/g, ""))).length;
+    if (hits) bump(s.id, 2 * hits);
   }
   // 3) 핵심 기반 조문은 약하게 보장(조례 검토의 토대)
   ["지방자치법-28", "행정기본법-10", "헌법-37"].forEach((id) => bump(id, 0.5));
